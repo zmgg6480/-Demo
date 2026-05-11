@@ -1,0 +1,6 @@
+{
+  "name": "文春小报模拟器",
+  "description": "高质感的周刊文春风格小报图模拟生成器，支持多布局模式、背景模糊及水印定制。",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
