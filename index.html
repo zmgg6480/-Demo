@@ -188,8 +188,6 @@
                             <div id="bg-blur-1" class="absolute inset-0 bg-cover bg-center scale-110 blur-[25px] opacity-60"></div>
                             <img id="main-img-1" src="" class="relative z-10 w-full h-auto block min-h-[100px]">
                             <div id="placeholder-1" class="w-full h-full flex flex-col items-center justify-center text-gray-300">
-                                <span class="text-5xl">📷</span>
-                                <span class="text-[10px] mt-2 font-bold tracking-widest text-gray-400">WAITING FOR SCOOP A</span>
                             </div>
                         </div>
                         <!-- Slot 2 (Hidden by default) -->
@@ -327,7 +325,7 @@
                         <label class="label-base text-left mb-0">模糊强度 (BLUR INTENSITY)</label>
                         <span id="blur-display" class="text-[11px] font-black text-blue-400">25px</span>
                     </div>
-                    <input type="range" id="blur-range" min="0" max="60" value="25" class="w-full h-2 bg-[#E8E4E0] rounded-lg appearance-none cursor-pointer outline-none">
+                    <input type="range" id="blur-range" min="0" max="100" value="25" class="w-full h-2 bg-[#E8E4E0] rounded-lg appearance-none cursor-pointer outline-none">
                 </div>
             </section>
 
@@ -483,12 +481,27 @@
             drawComposite(idx);
         }
 
+        function drawWatermarkToCanvas(ctx, w, h) {
+            const wm = document.getElementById('watermark-layer');
+            if (wm.classList.contains('hidden')) return;
+            
+            ctx.save();
+            ctx.globalAlpha = 0.2;
+            ctx.fillStyle = "white";
+            ctx.font = `${state.wmSize}px Georgia, serif`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.translate(w / 2, h / 2);
+            ctx.rotate(-25 * Math.PI / 180);
+            ctx.fillText("(C) 週刊文春", 0, 0);
+            ctx.restore();
+        }
+
         function drawComposite(idx) {
             const data = imageLayers[idx];
             if (!data.fg) return;
 
             const targetCanvas = document.getElementById(`main-canvas-${idx}`);
-            // If targetCanvas missing, create one.
             const canvasToUse = targetCanvas || document.createElement('canvas');
             if(!targetCanvas) { 
                 canvasToUse.id = `main-canvas-${idx}`; 
@@ -502,20 +515,23 @@
 
             ctx.clearRect(0, 0, w, h);
 
-            // 1. 渲染背景 (Inpainted + Blurred in generateLayers)
+            // 1. 渲染背景
             ctx.drawImage(data.bg, 0, 0, w, h);
 
-            // 2. 渲染主体：绝对清晰，位于最上层
+            // 2. 渲染主体
             ctx.drawImage(data.fg, 0, 0);
+
+            // 3. 渲染水印
+            drawWatermarkToCanvas(ctx, w, h);
         }
 
         // --- 以下所有功能逻辑保持不变 ---
-        document.getElementById('blur-range').addEventListener('input', (e) => {
+        ['input', 'touchmove'].forEach(evt => document.getElementById('blur-range').addEventListener(evt, (e) => {
             state.blur = parseInt(e.target.value);
             document.getElementById('blur-display').innerText = `${state.blur}px`;
             if (imageLayers[1] && imageLayers[1].fg) applyBlurToBackground(1);
             if (imageLayers[2] && imageLayers[2].fg) applyBlurToBackground(2);
-        });
+        }));
 
         // --- Quotes Pool ---
         const quotesPool = {
@@ -592,12 +608,32 @@
 
         async function downloadImage() {
             const node = document.querySelector("#capture-area");
+            const wm = document.getElementById('watermark-layer');
+            
+            // Temporarily hide the CSS watermark div as it's now drawn on canvas
+            const originalDisplay = wm.style.display;
+            wm.style.display = 'none';
+            
             try {
-                const canvas = await html2canvas(node, { scale: 3, useCORS: true, backgroundColor: "#ffffff", logging: false });
+                // scale: 2 ensures high DPI, backgroundColor: null enables transparency
+                const canvas = await html2canvas(node, { 
+                    scale: 2, 
+                    useCORS: true, 
+                    allowTaint: true, 
+                    backgroundColor: null 
+                });
+                
                 const link = document.createElement('a');
                 link.download = `bunshun_scoop_${Date.now()}.png`;
-                link.href = canvas.toDataURL("image/png"); link.click();
-            } catch (err) { alert("生成失败，请稍后重试"); }
+                link.href = canvas.toDataURL("image/png");
+                link.click();
+            } catch (err) { 
+                console.error(err);
+                alert("生成失败，请稍后重试"); 
+            } finally {
+                // Restore watermark display
+                wm.style.display = originalDisplay;
+            }
         }
 
         ['input-work-a', 'input-work-b', 'input-job', 'input-name-a', 'input-age-a', 'input-name-b', 'input-age-b', 'input-desc', 'input-time'].forEach(id => document.getElementById(id).addEventListener('input', updatePreview));
