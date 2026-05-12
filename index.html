@@ -409,27 +409,41 @@
             imageLayers[idx].fg = fgCanvas;
 
             // 2. 背景修补层 (消除 Halo)
-            // 引入“更厚”的遮罩进行背景剔除，防止主体边缘模糊混合
-            const dilatedMaskCanvas = document.createElement('canvas');
-            dilatedMaskCanvas.width = w; dilatedMaskCanvas.height = h;
-            const dCtx = dilatedMaskCanvas.getContext('2d');
-            dCtx.filter = 'blur(6px)'; // 软化并扩大mask范围
-            dCtx.drawImage(segmentationMask, 0, 0, w, h);
+            // A. 创建用于修补的临时背景画布
+            const tempBg = document.createElement('canvas');
+            imageLayers[idx].tempBg = tempBg; // Store unblurred bg
+            tempBg.width = w; tempBg.height = h;
+            const tCtx = tempBg.getContext('2d');
             
+            // Draw original image
+            tCtx.drawImage(image, 0, 0, w, h);
+            
+            // Remove person (heavily dilated mask)
+            tCtx.globalCompositeOperation = 'destination-out';
+            tCtx.filter = 'blur(15px)'; // Expanded dilation area
+            tCtx.drawImage(segmentationMask, 0, 0, w, h);
+            tCtx.filter = 'none'; // Reset filter
+
+            // Fill hole with solid high-key white filler
+            tCtx.globalCompositeOperation = 'destination-over';
+            tCtx.fillStyle = '#FFFFFF';
+            tCtx.fillRect(0, 0, w, h);
+
+            // B. Create final blurred background canvas
             const bgCanvas = document.createElement('canvas');
             bgCanvas.width = w; bgCanvas.height = h;
             const bgCtx = bgCanvas.getContext('2d');
-            bgCtx.drawImage(image, 0, 0);
-            bgCtx.globalCompositeOperation = 'destination-out';
-            // 使用软化的 mask 进行剔除
-            bgCtx.drawImage(dilatedMaskCanvas, 0, 0, w, h);
             
-            // Fill background with average color for seamless blend
-            const temp = document.createElement('canvas');
-            temp.width = 32; temp.height = 32;
-            temp.getContext('2d').drawImage(image, 0, 0, 32, 32);
-            bgCtx.globalCompositeOperation = 'destination-over';
-            bgCtx.drawImage(temp, 0, 0, w, h);
+            // Blur and brightness adjust
+            const brightnessBoost = 1 + (state.blur / 200);
+            bgCtx.filter = `blur(${state.blur}px) brightness(${brightnessBoost}) contrast(0.9)`;
+            bgCtx.drawImage(tempBg, 0, 0, w, h);
+            
+            // Overlay white tint for high-key style
+            bgCtx.globalCompositeOperation = 'source-over';
+            bgCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.4, state.blur / 80)})`;
+            bgCtx.fillRect(0, 0, w, h);
+
             imageLayers[idx].bg = bgCanvas;
 
             const placeholder = document.getElementById(`placeholder-${idx}`);
@@ -447,6 +461,28 @@
         }
 
         // --- 核心更新：微调高调、明亮的背景虚化逻辑 ---
+        function applyBlurToBackground(idx) {
+            const data = imageLayers[idx];
+            if (!data.tempBg) return;
+
+            const bgCanvas = document.createElement('canvas');
+            bgCanvas.width = data.w; bgCanvas.height = data.h;
+            const bgCtx = bgCanvas.getContext('2d');
+            
+            // Blur and brightness adjust
+            const brightnessBoost = 1 + (state.blur / 200);
+            bgCtx.filter = `blur(${state.blur}px) brightness(${brightnessBoost}) contrast(0.9)`;
+            bgCtx.drawImage(data.tempBg, 0, 0, data.w, data.h);
+            
+            // Overlay white tint for high-key style
+            bgCtx.globalCompositeOperation = 'source-over';
+            bgCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.4, state.blur / 80)})`;
+            bgCtx.fillRect(0, 0, data.w, data.h);
+
+            imageLayers[idx].bg = bgCanvas;
+            drawComposite(idx);
+        }
+
         function drawComposite(idx) {
             const data = imageLayers[idx];
             if (!data.fg) return;
@@ -466,20 +502,10 @@
 
             ctx.clearRect(0, 0, w, h);
 
-            // 1. 渲染背景：应用模糊 + 动态亮度提升 (Brightness Boost)
-            ctx.save();
-            const brightnessBoost = 1 + (state.blur / 400);
-            ctx.filter = `blur(${state.blur}px) brightness(${brightnessBoost}) contrast(0.95)`;
-            const bleed = state.blur * 2;
-            ctx.drawImage(data.bg, -bleed, -bleed, w + bleed * 2, h + bleed * 2);
-            ctx.restore();
+            // 1. 渲染背景 (Inpainted + Blurred in generateLayers)
+            ctx.drawImage(data.bg, 0, 0, w, h);
 
-            // 2. 渲染白色朦胧层 (White Tint Overlay)
-            const tintAlpha = state.blur / 160;
-            ctx.fillStyle = `rgba(255, 255, 255, ${tintAlpha})`;
-            ctx.fillRect(0, 0, w, h);
-
-            // 3. 渲染主体：绝对清晰，位于最上层
+            // 2. 渲染主体：绝对清晰，位于最上层
             ctx.drawImage(data.fg, 0, 0);
         }
 
@@ -487,8 +513,8 @@
         document.getElementById('blur-range').addEventListener('input', (e) => {
             state.blur = parseInt(e.target.value);
             document.getElementById('blur-display').innerText = `${state.blur}px`;
-            if (imageLayers[1] && imageLayers[1].fg) drawComposite(1);
-            if (imageLayers[2] && imageLayers[2].fg) drawComposite(2);
+            if (imageLayers[1] && imageLayers[1].fg) applyBlurToBackground(1);
+            if (imageLayers[2] && imageLayers[2].fg) applyBlurToBackground(2);
         });
 
         // --- Quotes Pool ---
