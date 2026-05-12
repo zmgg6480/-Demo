@@ -185,21 +185,14 @@
                     <div id="layout-wrapper" class="w-full flex">
                         <!-- Slot 1 -->
                         <div id="slot-1" class="relative w-full overflow-hidden aspect-[4/3]">
-                            <div id="bg-blur-1" class="absolute inset-0 bg-cover bg-center scale-110 blur-[25px] opacity-60"></div>
                             <img id="main-img-1" src="" class="relative z-10 w-full h-auto block min-h-[100px]">
                             <div id="placeholder-1" class="w-full h-full flex flex-col items-center justify-center text-gray-300">
                             </div>
                         </div>
                         <!-- Slot 2 (Hidden by default) -->
                         <div id="slot-2" class="relative w-full hidden overflow-hidden aspect-[4/3] border-l border-white/50">
-                            <div id="bg-blur-2" class="absolute inset-0 bg-cover bg-center scale-110 blur-[25px] opacity-60"></div>
                             <img id="main-img-2" src="" class="relative z-10 w-full h-auto block min-h-[100px]">
                         </div>
-                    </div>
-
-                    <!-- Watermark Overlay -->
-                    <div id="watermark-layer" class="watermark-overlay serif">
-                        (C) 週刊文春
                     </div>
                 </div>
             </div>
@@ -352,7 +345,7 @@
     <!-- Script -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
     <script>
-        const state = { workMode: 'same', gender: '男性2人', layout: 'single', blur: 25, wmSize: 56 };
+        const state = { workMode: 'same', gender: '男性2人', layout: 'single', blur: 25, wmSize: 56, wmPos: 'center' };
         const imageLayers = [null, { fg: null, bg: null, w: 0, h: 0 }, { fg: null, bg: null, w: 0, h: 0 }];
 
         // --- 初始化 MediaPipe Selfie Segmentation ---
@@ -368,8 +361,9 @@
         document.getElementById('wm-range').addEventListener('input', (e) => {
             const size = e.target.value;
             state.wmSize = size;
-            document.getElementById('watermark-layer').style.fontSize = `${size}px`;
             document.getElementById('wm-display').innerText = `${size}px`;
+            if (imageLayers[1] && imageLayers[1].fg) drawComposite(1);
+            if (imageLayers[2] && imageLayers[2].fg) drawComposite(2);
         });
 
         async function handleUpload(input, index) {
@@ -485,18 +479,22 @@
         }
 
         function drawWatermarkToCanvas(ctx, w, h) {
-            const wm = document.getElementById('watermark-layer');
-            if (wm.classList.contains('hidden')) return;
+            if (state.wmPos === 'none') return;
             
             ctx.save();
-            ctx.globalAlpha = 0.3; // Fixed opacity
+            ctx.globalAlpha = 0.3;
             ctx.fillStyle = "white";
             const dpr = window.devicePixelRatio || 1;
             const fontSize = state.wmSize * dpr;
             ctx.font = `${fontSize}px Georgia, serif`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            ctx.translate(w / 2, h / 2);
+            
+            let x = w / 2, y = h / 2;
+            if (state.wmPos === 'bottom-left') { x = fontSize * 2; y = h - fontSize * 2; }
+            else if (state.wmPos === 'top-right') { x = w - fontSize * 2; y = fontSize * 2; }
+            
+            ctx.translate(x, y);
             ctx.rotate(-25 * Math.PI / 180);
             ctx.fillText("(C) 週刊文春", 0, 0);
             ctx.restore();
@@ -604,26 +602,17 @@
         }
 
         function setWatermarkPos(pos) {
-            const layer = document.getElementById('watermark-layer');
-            layer.classList.remove('hidden', 'items-center', 'justify-center', 'items-end', 'justify-start', 'items-start', 'justify-end', 'p-8');
-            if (pos === 'none') { layer.classList.add('hidden'); return; }
-            layer.classList.add('flex');
-            if(pos === 'center') layer.classList.add('items-center', 'justify-center');
-            else if(pos === 'bottom-left') layer.classList.add('items-end', 'justify-start', 'p-8');
-            else if(pos === 'top-right') layer.classList.add('items-start', 'justify-end', 'p-8');
+            state.wmPos = pos;
+            drawComposite(1);                
+            drawComposite(2);
         }
 
         async function downloadImage() {
             const node = document.querySelector("#capture-area");
-            const wm = document.getElementById('watermark-layer');
             
             // Fix alignment during export
             const originalWidth = node.style.width;
             node.style.width = '375px'; 
-            
-            // Temporarily hide the CSS watermark div
-            const originalDisplay = wm.style.display;
-            wm.style.display = 'none';
             
             try {
                 // scale: 3 for higher quality, backgroundColor: null for transparency
@@ -644,8 +633,7 @@
                 console.error(err);
                 alert("生成失败，请稍后重试"); 
             } finally {
-                // Restore watermark display and width
-                wm.style.display = originalDisplay;
+                // Restore width
                 node.style.width = originalWidth;
             }
         }
