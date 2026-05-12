@@ -325,7 +325,7 @@
                         <label class="label-base text-left mb-0">模糊强度 (BLUR INTENSITY)</label>
                         <span id="blur-display" class="text-[11px] font-black text-blue-400">25px</span>
                     </div>
-                    <input type="range" id="blur-range" min="0" max="100" value="25" class="w-full h-2 bg-[#E8E4E0] rounded-lg appearance-none cursor-pointer outline-none">
+                    <input type="range" id="blur-range" min="0" max="150" value="25" class="w-full h-2 bg-[#E8E4E0] rounded-lg appearance-none cursor-pointer outline-none">
                 </div>
             </section>
 
@@ -396,6 +396,7 @@
             const { image, segmentationMask } = results;
             const w = image.width, h = image.height;
             imageLayers[idx] = { w, h };
+            const data = imageLayers[idx];
 
             // 1. 前景锐利层 (使用原始 mask)
             const fgCanvas = document.createElement('canvas');
@@ -433,14 +434,16 @@
             const bgCtx = bgCanvas.getContext('2d');
             
             // Blur and brightness adjust
-            const brightnessBoost = 1 + (state.blur / 200);
-            bgCtx.filter = `blur(${state.blur}px) brightness(${brightnessBoost}) contrast(0.9)`;
-            bgCtx.drawImage(tempBg, 0, 0, w, h);
+            const brightnessBoost = 1 + (state.blur / 800);
+            const contrastBoost = 1 + (state.blur / 1000);
+            bgCtx.filter = `blur(${state.blur}px) brightness(${brightnessBoost}) contrast(${contrastBoost})`;
+            bgCtx.willChange = 'filter';
+            bgCtx.drawImage(data.tempBg, 0, 0, data.w, data.h);
             
             // Overlay white tint for high-key style
             bgCtx.globalCompositeOperation = 'source-over';
-            bgCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.4, state.blur / 80)})`;
-            bgCtx.fillRect(0, 0, w, h);
+            bgCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.5, state.blur / 150)})`;
+            bgCtx.fillRect(0, 0, data.w, data.h);
 
             imageLayers[idx].bg = bgCanvas;
 
@@ -486,9 +489,11 @@
             if (wm.classList.contains('hidden')) return;
             
             ctx.save();
-            ctx.globalAlpha = 0.2;
+            ctx.globalAlpha = 0.3; // Fixed opacity
             ctx.fillStyle = "white";
-            ctx.font = `${state.wmSize}px Georgia, serif`;
+            const dpr = window.devicePixelRatio || 1;
+            const fontSize = state.wmSize * dpr;
+            ctx.font = `${fontSize}px Georgia, serif`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.translate(w / 2, h / 2);
@@ -528,7 +533,9 @@
         // --- 以下所有功能逻辑保持不变 ---
         ['input', 'touchmove'].forEach(evt => document.getElementById('blur-range').addEventListener(evt, (e) => {
             state.blur = parseInt(e.target.value);
-            document.getElementById('blur-display').innerText = `${state.blur}px`;
+            let label = 'px';
+            if (state.blur > 80) label = 'px / 强力虚化'; else if (state.blur > 40) label = 'px / 自然';
+            document.getElementById('blur-display').innerText = `${state.blur}${label}`;
             if (imageLayers[1] && imageLayers[1].fg) applyBlurToBackground(1);
             if (imageLayers[2] && imageLayers[2].fg) applyBlurToBackground(2);
         }));
@@ -610,14 +617,20 @@
             const node = document.querySelector("#capture-area");
             const wm = document.getElementById('watermark-layer');
             
-            // Temporarily hide the CSS watermark div as it's now drawn on canvas
+            // Fix alignment during export
+            const originalWidth = node.style.width;
+            node.style.width = '375px'; 
+            
+            // Temporarily hide the CSS watermark div
             const originalDisplay = wm.style.display;
             wm.style.display = 'none';
             
             try {
-                // scale: 2 ensures high DPI, backgroundColor: null enables transparency
+                // scale: 3 for higher quality, backgroundColor: null for transparency
+                // Ensure correct DPI usage with window.devicePixelRatio
+                const dpr = window.devicePixelRatio || 2;
                 const canvas = await html2canvas(node, { 
-                    scale: 2, 
+                    scale: dpr, 
                     useCORS: true, 
                     allowTaint: true, 
                     backgroundColor: null 
@@ -631,8 +644,9 @@
                 console.error(err);
                 alert("生成失败，请稍后重试"); 
             } finally {
-                // Restore watermark display
+                // Restore watermark display and width
                 wm.style.display = originalDisplay;
+                node.style.width = originalWidth;
             }
         }
 
