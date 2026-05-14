@@ -460,19 +460,37 @@
             const data = imageLayers[idx];
             if (!data.tempBg) return;
 
+            const dpr = window.devicePixelRatio || 1;
+            const w = data.w;
+            const h = data.h;
+            
+            // Downsampling: 0.25 scale (1/4 size)
+            const scale = 0.25;
+            const smallW = Math.max(1, Math.floor(w * scale));
+            const smallH = Math.max(1, Math.floor(h * scale));
+            const smallCanvas = document.createElement('canvas');
+            smallCanvas.width = smallW;
+            smallCanvas.height = smallH;
+            const smallCtx = smallCanvas.getContext('2d');
+            
+            // Resize and Apply Blur on small canvas
+            smallCtx.drawImage(data.tempBg, 0, 0, smallW, smallH);
+            const blurRadius = (state.blur * dpr) / 4; // Adjust blur radius for small canvas
+            smallCtx.filter = `blur(${Math.max(1, blurRadius)}px) brightness(1.15) contrast(1.05)`;
+            smallCtx.drawImage(smallCanvas, 0, 0);
+            
             const bgCanvas = document.createElement('canvas');
-            bgCanvas.width = data.w; bgCanvas.height = data.h;
+            bgCanvas.width = w;
+            bgCanvas.height = h;
             const bgCtx = bgCanvas.getContext('2d');
             
-            // Blur and brightness adjust
-            const brightnessBoost = 1 + (state.blur / 200);
-            bgCtx.filter = `blur(${state.blur}px) brightness(${brightnessBoost}) contrast(0.9)`;
-            bgCtx.drawImage(data.tempBg, 0, 0, data.w, data.h);
+            // Draw back up
+            bgCtx.drawImage(smallCanvas, 0, 0, w, h);
             
             // Overlay white tint for high-key style
             bgCtx.globalCompositeOperation = 'source-over';
-            bgCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.4, state.blur / 80)})`;
-            bgCtx.fillRect(0, 0, data.w, data.h);
+            bgCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.5, state.blur / 150)})`;
+            bgCtx.fillRect(0, 0, w, h);
 
             imageLayers[idx].bg = bgCanvas;
             drawComposite(idx);
