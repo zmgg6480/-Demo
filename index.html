@@ -333,10 +333,10 @@
                 </div>
                 <!-- Watermark Position Buttons -->
                 <div class="grid grid-cols-2 gap-4">
-                     <button onclick="setWatermarkPos('center')" class="py-5 bg-white rounded-2xl text-xs font-bold neu-button text-gray-600 hover:text-blue-500 transition-colors">🎯 居中覆盖</button>
-                     <button onclick="setWatermarkPos('bottom-left')" class="py-5 bg-white rounded-2xl text-xs font-bold neu-button text-gray-600 hover:text-blue-500 transition-colors">↙️ 左下定位</button>
-                     <button onclick="setWatermarkPos('top-right')" class="py-5 bg-white rounded-2xl text-xs font-bold neu-button text-gray-600 hover:text-blue-500 transition-colors">↗️ 右上定位</button>
-                     <button onclick="setWatermarkPos('none')" class="py-5 bg-white rounded-2xl text-xs font-bold neu-button text-gray-600 hover:text-blue-500 transition-colors">❌ 无水印</button>
+                     <button onclick="setWatermarkPos('default')" class="py-5 bg-white rounded-2xl text-xs font-bold neu-button text-gray-600 hover:text-blue-500 transition-colors">🎯 默认</button>
+                     <button onclick="setWatermarkPos('left-45')" class="py-5 bg-white rounded-2xl text-xs font-bold neu-button text-gray-600 hover:text-blue-500 transition-colors">↙️ 左倾 45°</button>
+                     <button onclick="setWatermarkPos('right-45')" class="py-5 bg-white rounded-2xl text-xs font-bold neu-button text-gray-600 hover:text-blue-500 transition-colors">↗️ 右倾 45°</button>
+                     <button onclick="setWatermarkPos('none')" class="py-5 bg-white rounded-2xl text-xs font-bold neu-button text-gray-600 hover:text-blue-500 transition-colors">❌ 无</button>
                 </div>
             </section>
         </main>
@@ -345,7 +345,7 @@
     <!-- Script -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
     <script>
-        const state = { workMode: 'same', gender: '男性2人', layout: 'single', blur: 25, wmSize: 56, wmPos: 'center' };
+        const state = { workMode: 'same', gender: '男性2人', layout: 'single', blur: 25, wmSize: 56, wmPos: 'default' };
         const imageLayers = [null, { fg: null, bg: null, w: 0, h: 0 }, { fg: null, bg: null, w: 0, h: 0 }];
 
         // --- 初始化 MediaPipe Selfie Segmentation ---
@@ -389,58 +389,8 @@
             console.log("generateLayers called with idx:", idx);
             const { image, segmentationMask } = results;
             const w = image.width, h = image.height;
-            imageLayers[idx] = { w, h };
-            const data = imageLayers[idx];
-
-            // 1. 前景锐利层 (使用原始 mask)
-            const fgCanvas = document.createElement('canvas');
-            fgCanvas.width = w; fgCanvas.height = h;
-            const fgCtx = fgCanvas.getContext('2d');
-            fgCtx.drawImage(segmentationMask, 0, 0, w, h);
-            fgCtx.globalCompositeOperation = 'source-in';
-            fgCtx.drawImage(image, 0, 0, w, h);
-            imageLayers[idx].fg = fgCanvas;
-
-            // 2. 背景修补层 (消除 Halo)
-            // A. 创建用于修补的临时背景画布
-            const tempBg = document.createElement('canvas');
-            imageLayers[idx].tempBg = tempBg; // Store unblurred bg
-            tempBg.width = w; tempBg.height = h;
-            const tCtx = tempBg.getContext('2d');
+            imageLayers[idx] = { w, h, originalImage: image, mask: segmentationMask };
             
-            // Draw original image
-            tCtx.drawImage(image, 0, 0, w, h);
-            
-            // Remove person (heavily dilated mask)
-            tCtx.globalCompositeOperation = 'destination-out';
-            tCtx.filter = 'blur(15px)'; // Expanded dilation area
-            tCtx.drawImage(segmentationMask, 0, 0, w, h);
-            tCtx.filter = 'none'; // Reset filter
-
-            // Fill hole with solid high-key white filler
-            tCtx.globalCompositeOperation = 'destination-over';
-            tCtx.fillStyle = '#FFFFFF';
-            tCtx.fillRect(0, 0, w, h);
-
-            // B. Create final blurred background canvas
-            const bgCanvas = document.createElement('canvas');
-            bgCanvas.width = w; bgCanvas.height = h;
-            const bgCtx = bgCanvas.getContext('2d');
-            
-            // Blur and brightness adjust
-            const brightnessBoost = 1 + (state.blur / 800);
-            const contrastBoost = 1 + (state.blur / 1000);
-            bgCtx.filter = `blur(${state.blur}px) brightness(${brightnessBoost}) contrast(${contrastBoost})`;
-            bgCtx.willChange = 'filter';
-            bgCtx.drawImage(data.tempBg, 0, 0, data.w, data.h);
-            
-            // Overlay white tint for high-key style
-            bgCtx.globalCompositeOperation = 'source-over';
-            bgCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.5, state.blur / 150)})`;
-            bgCtx.fillRect(0, 0, data.w, data.h);
-
-            imageLayers[idx].bg = bgCanvas;
-
             const placeholder = document.getElementById(`placeholder-${idx}`);
             if (placeholder) {
                 placeholder.classList.add('hidden');
@@ -452,45 +402,91 @@
             if (mainImg) {
                 mainImg.classList.add('hidden');
             }
-            drawComposite(idx);
+            
+            applyBlurToBackground(idx);
         }
 
-        // --- 核心更新：微调高调、明亮的背景虚化逻辑 ---
+        // --- 核心更新：高保真且适配移动端的文春质感虚化 ---
         function applyBlurToBackground(idx) {
             const data = imageLayers[idx];
-            if (!data.tempBg) return;
+            if (!data.originalImage) return;
 
             const dpr = window.devicePixelRatio || 1;
             const w = data.w;
             const h = data.h;
             
-            // Downsampling: 0.25 scale (1/4 size)
+            // 1. FOREGROUND LAYER 
+            // Feather subject mask edges with 8px soft blur to avoid harsh cutout artifacts
+            const fgCanvas = document.createElement('canvas');
+            fgCanvas.width = w; fgCanvas.height = h;
+            const fgCtx = fgCanvas.getContext('2d');
+            
+            const maskCanvas = document.createElement('canvas');
+            maskCanvas.width = w; maskCanvas.height = h;
+            const maskCtx = maskCanvas.getContext('2d');
+            maskCtx.filter = 'blur(8px)';
+            maskCtx.drawImage(data.mask, 0, 0, w, h);
+            maskCtx.filter = 'none';
+
+            fgCtx.drawImage(maskCanvas, 0, 0, w, h);
+            fgCtx.globalCompositeOperation = 'source-in';
+            fgCtx.drawImage(data.originalImage, 0, 0, w, h);
+
+            // Add subtle optical bloom around subject boundary
+            fgCtx.globalCompositeOperation = 'screen';
+            fgCtx.filter = 'blur(12px) opacity(0.3)';
+            fgCtx.drawImage(fgCanvas, 0, 0, w, h);
+            fgCtx.filter = 'none';
+            fgCtx.globalCompositeOperation = 'source-over';
+
+            imageLayers[idx].fg = fgCanvas;
+
+            // 2. BACKGROUND LAYER
+            // Downsampling: 0.25 scale (1/4 size) for performance
             const scale = 0.25;
             const smallW = Math.max(1, Math.floor(w * scale));
             const smallH = Math.max(1, Math.floor(h * scale));
+            
+            // Prepare an inpainted background without the subject to avoid halos
+            const tempBg = document.createElement('canvas');
+            tempBg.width = smallW; tempBg.height = smallH;
+            const tCtx = tempBg.getContext('2d');
+            
+            // Draw scaled original
+            tCtx.drawImage(data.originalImage, 0, 0, smallW, smallH);
+            
+            // Remove subject using mask
+            tCtx.globalCompositeOperation = 'destination-out';
+            tCtx.filter = 'blur(4px)';
+            tCtx.drawImage(data.mask, 0, 0, smallW, smallH);
+            tCtx.filter = 'none';
+            
+            // Fill hole with heavily blurred original behind it
+            tCtx.globalCompositeOperation = 'destination-over';
+            tCtx.filter = 'blur(20px)';
+            tCtx.drawImage(data.originalImage, 0, 0, smallW, smallH);
+            tCtx.filter = 'none';
+            tCtx.globalCompositeOperation = 'source-over';
+
+            // Apply background-only filter stack: blur() brightness(0.92) contrast(1.08) saturate(0.85)
             const smallCanvas = document.createElement('canvas');
-            smallCanvas.width = smallW;
-            smallCanvas.height = smallH;
+            smallCanvas.width = smallW; smallCanvas.height = smallH;
             const smallCtx = smallCanvas.getContext('2d');
             
-            // Resize and Apply Blur on small canvas
-            smallCtx.drawImage(data.tempBg, 0, 0, smallW, smallH);
-            const blurRadius = (state.blur * dpr) / 4; // Adjust blur radius for small canvas
-            smallCtx.filter = `blur(${Math.max(1, blurRadius)}px) brightness(1.15) contrast(1.05)`;
+            // Blur strength adaptive formula
+            const adaptiveRadius = Math.max(18, window.innerWidth * 0.04);
+            const finalBlurRadius = adaptiveRadius * (state.blur / 25);
+            const downsampledBlur = (finalBlurRadius * scale * dpr);
+            
+            smallCtx.drawImage(tempBg, 0, 0, smallW, smallH);
+            smallCtx.filter = `blur(${Math.max(1, downsampledBlur)}px) brightness(0.92) contrast(1.08) saturate(0.85)`;
             smallCtx.drawImage(smallCanvas, 0, 0);
             
+            // Scale background back to full resolution
             const bgCanvas = document.createElement('canvas');
-            bgCanvas.width = w;
-            bgCanvas.height = h;
+            bgCanvas.width = w; bgCanvas.height = h;
             const bgCtx = bgCanvas.getContext('2d');
-            
-            // Draw back up
             bgCtx.drawImage(smallCanvas, 0, 0, w, h);
-            
-            // Overlay white tint for high-key style
-            bgCtx.globalCompositeOperation = 'source-over';
-            bgCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.5, state.blur / 150)})`;
-            bgCtx.fillRect(0, 0, w, h);
 
             imageLayers[idx].bg = bgCanvas;
             drawComposite(idx);
@@ -500,27 +496,37 @@
             if (state.wmPos === 'none') return;
             
             ctx.save();
-            ctx.globalAlpha = 0.3;
-            ctx.fillStyle = "white";
             const dpr = window.devicePixelRatio || 1;
             const fontSize = state.wmSize * dpr;
-            ctx.font = `${fontSize}px Georgia, serif`;
+            ctx.font = `900 ${fontSize}px Georgia, serif`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             
-            let x = w / 2, y = h / 2;
-            if (state.wmPos === 'bottom-left') { x = fontSize * 2; y = h - fontSize * 2; }
-            else if (state.wmPos === 'top-right') { x = w - fontSize * 2; y = fontSize * 2; }
+            let angle = 0;
+            if (state.wmPos === 'left-45') angle = -45 * Math.PI / 180;
+            else if (state.wmPos === 'right-45') angle = 45 * Math.PI / 180;
             
-            ctx.translate(x, y);
-            ctx.rotate(-25 * Math.PI / 180);
+            ctx.translate(w / 2, h / 2);
+            ctx.rotate(angle);
+
+            // 1. Watermark layer with white color and inner shadow simulation using drop shadow
+            ctx.globalAlpha = 0.45;
+            ctx.fillStyle = "#FFFFFF";
+            
+            ctx.shadowColor = "rgba(70, 70, 70, 0.8)";
+            ctx.shadowBlur = 4 * dpr;
+            ctx.shadowOffsetX = 1.5 * dpr;
+            ctx.shadowOffsetY = 1.5 * dpr;
+
             ctx.fillText("(C) 週刊文春", 0, 0);
+
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.restore();
         }
 
         function drawComposite(idx) {
             const data = imageLayers[idx];
-            if (!data.fg) return;
+            if (!data.fg || !data.bg) return;
 
             const targetCanvas = document.getElementById(`main-canvas-${idx}`);
             const canvasToUse = targetCanvas || document.createElement('canvas');
@@ -536,11 +542,35 @@
 
             ctx.clearRect(0, 0, w, h);
 
+            // Apply final global canvas post-processing
+            ctx.filter = 'contrast(1.05) saturate(0.92)';
+
             // 1. 渲染背景
             ctx.drawImage(data.bg, 0, 0, w, h);
 
             // 2. 渲染主体
             ctx.drawImage(data.fg, 0, 0);
+            
+            ctx.filter = 'none';
+
+            // Add Bunshun-like cinematic overlay
+            const rx = w / 2;
+            const ry = h / 2;
+            // distinct radial vignette: transparent center -> rgba(0,0,0,0.45) edges
+            const gradient = ctx.createRadialGradient(rx, ry, Math.min(rx, ry) * 0.4, rx, ry, Math.max(rx, ry) * 1.5);
+            gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
+            
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, w, h);
+
+            // low-contrast diffusion haze & slight print softness
+            ctx.globalCompositeOperation = 'screen';
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+            ctx.fillRect(0, 0, w, h);
+
+            ctx.globalCompositeOperation = 'source-over';
 
             // 3. 渲染水印
             drawWatermarkToCanvas(ctx, w, h);
@@ -552,8 +582,8 @@
             let label = 'px';
             if (state.blur > 80) label = 'px / 强力虚化'; else if (state.blur > 40) label = 'px / 自然';
             document.getElementById('blur-display').innerText = `${state.blur}${label}`;
-            if (imageLayers[1] && imageLayers[1].fg) applyBlurToBackground(1);
-            if (imageLayers[2] && imageLayers[2].fg) applyBlurToBackground(2);
+            if (imageLayers[1] && imageLayers[1].originalImage) applyBlurToBackground(1);
+            if (imageLayers[2] && imageLayers[2].originalImage) applyBlurToBackground(2);
         }));
 
         // --- Quotes Pool ---
@@ -621,8 +651,21 @@
 
         function setWatermarkPos(pos) {
             state.wmPos = pos;
-            drawComposite(1);                
-            drawComposite(2);
+            
+            // Update UI buttons
+            const buttons = document.querySelectorAll('button[onclick^="setWatermarkPos"]');
+            buttons.forEach(btn => {
+                if (btn.getAttribute('onclick') === `setWatermarkPos('${pos}')`) {
+                    btn.classList.add('text-blue-500');
+                    btn.classList.remove('text-gray-600');
+                } else {
+                    btn.classList.remove('text-blue-500');
+                    btn.classList.add('text-gray-600');
+                }
+            });
+
+            if (imageLayers[1] && imageLayers[1].originalImage) drawComposite(1);                
+            if (imageLayers[2] && imageLayers[2].originalImage) drawComposite(2);
         }
 
         async function downloadImage() {
